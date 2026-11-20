@@ -82,6 +82,7 @@ from test_dynamics import random_filtration  # noqa: E402  (module guarded below
 rng = np.random.default_rng(11)
 tau_grid = np.array([0.5, 1, 2, 4, 8, 12, 16, 24, 32, 48])
 curves = []
+cons_err = []
 for trial in range(6):
     Ks = random_filtration(rng=rng)
     x = rng.normal(size=Ks[0].nV)
@@ -96,13 +97,16 @@ for trial in range(6):
         mean = (mean * Ks[i - 1].nV + xi[i].sum()) / Ks[i].nV
     errs, bnds = [], []
     lams = [np.linalg.norm(Lambda(Ks[i], Ks[i + 1]), 2) for i in range(len(Ks) - 1)]
+    cpred = (x.sum() + sum(v.sum() for v in xi[1:])) / Ks[-1].nV
     for t in tau_grid:
-        _, uinf, _ = simulate_forward(Ks, BETA, [t] * (len(Ks) - 1), x, u, xi, ze)
+        cval, uinf, _ = simulate_forward(Ks, BETA, [t] * (len(Ks) - 1), x, u, xi, ze)
+        cons_err.append(abs(cval - cpred))
         errs.append(np.linalg.norm(uinf - pred))
         bnds.append(np.sqrt(B2) * sum(lams[i] * exact_sector_gain(Ks[i], BETA, t)
                                        for i in range(len(Ks) - 1)))
     curves.append((np.array(errs), np.array(bnds), [K.betti1() for K in Ks]))
 OUT["exp2"] = dict(max_err_over_bound=float(max(np.max(e / b) for e, b, _ in curves)),
+                   max_consensus_err=float(max(cons_err)),
                    betti=[c[2] for c in curves])
 
 # ---------------------------------------------------------------------------
@@ -223,6 +227,7 @@ OUT["exp4"]["nu"] = nu
 assert OUT["exp1"]["max_ratio_res_over_bound"] <= 1.0
 assert OUT["exp1"]["no_birth_residual"] < 1e-12
 assert OUT["exp2"]["max_err_over_bound"] <= 1.0
+assert OUT["exp2"]["max_consensus_err"] < 1e-12
 for p_ in OUT["exp3"]["plap"]:
     assert p_["dim_ker"] == p_["pers_betti"]
     assert p_["norm_transport"] <= p_["norm_proj"] + 1e-9
