@@ -119,7 +119,7 @@ def ring(n, R, w, c):
 
 pts = np.r_[ring(36, 1.0, 0.06, (0, 0)), ring(14, 0.45, 0.03, (1.72, 0))]
 st = gudhi.RipsComplex(points=pts, max_edge_length=4.0).create_simplex_tree(max_dimension=2)
-st.compute_persistence(persistence_dim_max=True)
+st.compute_persistence(homology_coeff_field=11, persistence_dim_max=True)
 bars = [(b, d) for dim, (b, d) in st.persistence() if dim == 1]
 
 

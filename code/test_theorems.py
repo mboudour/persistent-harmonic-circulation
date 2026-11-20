@@ -45,7 +45,7 @@ for trial in range(25):
     sel = [stages[k] for k in np.linspace(0, len(stages) - 1, 6).astype(int)]
     Ks = [K for _, K in sel]
     rs = [r for r, _ in sel]
-    st.compute_persistence(persistence_dim_max=True)
+    st.compute_persistence(homology_coeff_field=11, persistence_dim_max=True)
     for i in range(len(Ks) - 1):
         K, L = Ks[i], Ks[i + 1]
         _, I1 = inclusion(K, L)
@@ -108,4 +108,9 @@ for trial in range(25):
 
 for k, v in worst.items():
     print(f"{k:45s} {v:.2e}")
-print("rank Phi == persistent Betti == dim ker persistent Laplacian:", ok_rank)
+print("rank Phi == persistent Betti (GUDHI, F_11) == dim ker persistent Laplacian:", ok_rank)
+assert ok_rank, "rank mismatch"
+for k, v in worst.items():
+    lim = 1e-9 if 'error' not in k else 1e-6
+    assert v < lim, (k, v)
+print("all assertions passed (absolute tolerance 1e-9; dynamics 1e-6)")

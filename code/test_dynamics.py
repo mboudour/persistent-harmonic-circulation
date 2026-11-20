@@ -69,3 +69,6 @@ if __name__ == "__main__":
             # crude bound with M=1 (energy contractivity): err <= B * sum ||Lambda_j||
             bound = B * sum(np.linalg.norm(Lambda(Ks[i], Ks[i+1]), 2) for i in range(len(Ks)-1))
             print(f"{tau:4d}  {err/bound:.3e}  {err:.3e}  consensus err {abs(c-cpred):.1e}")
+            assert err <= bound, "dwell-time bound violated"
+            assert abs(c - cpred) < 1e-9, "consensus value"
+    print("all assertions passed")

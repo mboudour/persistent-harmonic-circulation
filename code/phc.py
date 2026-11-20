@@ -106,6 +106,8 @@ def exact_rate(K, beta):
     """Decay rate of the exact sector and the critical-damping flag."""
     mu = np.linalg.eigvalsh(K.L0())
     mu = mu[mu > 1e-9]
+    if mu.size == 0:            # single vertex: empty exact sector, convention alpha_E = infinity
+        return np.inf, False
     r = []
     crit = False
     for m_ in mu:
@@ -149,20 +151,41 @@ def persistent_laplacian_1(K, L):
     return K.B1.T @ K.B1 + D @ D.T
 
 
-def persistent_harmonic_kernel(K, L, tol=1e-8):
+def null_abs(M, tol=1e-10):
+    """Orthonormal basis of ker M using an ABSOLUTE singular-value cutoff tol.
+    (scipy's null_space uses a cutoff relative to the largest singular value,
+    which treats round-off as a constraint when M is numerically zero.)"""
+    M = np.atleast_2d(M)
+    n = M.shape[1]
+    if M.shape[0] == 0 or np.abs(M).max(initial=0.0) <= tol:
+        return np.eye(n)
+    _, sv, Vt = np.linalg.svd(M, full_matrices=True)
+    r = int(np.sum(sv > tol))
+    return Vt[r:].T
+
+
+def persistent_harmonic_kernel(K, L, tol=1e-10, check=True):
     """Orthonormal basis of ker Delta_1^{K,L}, computed without forming the operator:
     ker Delta_1^{K,L} = Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp. Same kernel as persistent_laplacian_1,
-    but uses only an orthonormal basis of B_1(L), so it scales to large Rips complexes."""
+    but uses only an orthonormal basis Q of B_1(L), so it scales to large Rips complexes.
+    All cutoffs are absolute (Q is orthonormal, so singular values of its blocks lie in [0,1])."""
     _, I1 = inclusion(K, L)
     outside = [k for k, e in enumerate(L.E) if e not in K.ei]
     cols = [K.B1.T]
+    Bup = np.zeros((K.nE, 0))
     if L.B2.shape[1]:
-        Q = orth(L.B2)
+        U, sv, _ = np.linalg.svd(L.B2, full_matrices=False)
+        Q = U[:, sv > tol * max(1.0, sv.max(initial=0.0))]      # orthonormal basis of B_1(L)
         if Q.size:
-            N = null_space(Q[outside, :], rcond=1e-10) if outside else np.eye(Q.shape[1])
-            cols.append(I1.T @ Q @ N)
-    M = np.hstack(cols)
-    return null_space(M.T, rcond=tol)
+            N = null_abs(Q[outside, :], tol) if outside else np.eye(Q.shape[1])
+            Bup = I1.T @ Q @ N                                   # basis of B_1(L) ∩ C_1(K)
+            cols.append(Bup)
+    H = null_abs(np.hstack(cols).T, tol)
+    if check and H.size:
+        # verify against the defining constraints: cycle in K, orthogonal to K-supported L-boundaries
+        assert np.abs(K.B1 @ H).max() < 1e-8, "kernel vector is not a cycle"
+        assert np.abs(Bup.T @ H).max(initial=0.0) < 1e-8, "kernel vector not orthogonal to boundaries"
+    return H
 
 
 def effective_resistance(K, a, b):
