@@ -76,6 +76,36 @@ def main():
         E33 += [(0, a_), (a_, b_), (0, b_)]; loop.append((a_, b_))
     F33 = [(0, *loop[j], 0, *loop[j + 1], 0, *loop[j + 1]) for j in range(n33 - 1)] + [(0, *loop[-1])]
     K33 = Complex(range(2 * n33 + 1), E33, F33)
+    from phc import P1, P2
+    ok("certified rank is not fooled by large primes: rank diag(P1, P2) = 2",
+       exact_rank(np.diag([P1, P2])) == 2)
+    # regression: wedge of 62 triangles whose face matrix has two blocks with determinants P1 and P2
+    def det_prime_block(p, n=31):
+        A_ = np.zeros((n, n), dtype=np.int64)
+        for i_ in range(n - 1):
+            A_[i_, i_] = 2; A_[i_, i_ + 1] = -1
+        A_[-1, :] = [(int(p) >> j_) & 1 for j_ in range(n)]
+        return A_
+    from scipy.linalg import block_diag
+    A62 = block_diag(det_prime_block(P1), det_prime_block(P2)); n62 = len(A62)
+    E62 = [e for j in range(n62) for e in [(0, 2 * j + 1), (2 * j + 1, 2 * j + 2), (0, 2 * j + 2)]]
+    F62 = []
+    for k in range(n62):
+        walk = [0]
+        for j in range(n62):
+            a_, b_ = 2 * j + 1, 2 * j + 2
+            for _ in range(abs(int(A62[j, k]))):
+                walk.extend([a_, b_, 0] if A62[j, k] > 0 else [b_, a_, 0])
+        F62.append(tuple(walk[:-1]))
+    K62 = Complex(range(2 * n62 + 1), E62, F62)
+    ok("regression: prime-determinant complex has trivial persistent kernel",
+       np.array_equal(K62.B2[::3, :], A62) and exact_rank(K62.B2) == 62
+       and persistent_harmonic_kernel(K62, K62).shape[1] == 0)
+    beta_c = np.sqrt(2) * (1 + 1e-12)                 # single edge: mu = 2, critical beta = sqrt(2)
+    disc = beta_c ** 2 * 4 - 8
+    true_rate = 4 / (2 * beta_c + np.sqrt(max(disc, 0)))
+    ok("near-critical rate is never overstated",
+       exact_rate(Complex([0, 1], [(0, 1)]), beta_c)[0] <= true_rate + 1e-15)
     ok("regression: ill-conditioned 33-loop complex has trivial persistent kernel",
        exact_rank(K33.B2) == 33 and persistent_harmonic_kernel(K33, K33).shape[1] == 0)
 

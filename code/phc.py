@@ -112,13 +112,12 @@ def exact_rate(K, beta):
     crit = False
     for m_ in mu:
         disc = beta ** 2 * m_ ** 2 - 4 * m_
-        if abs(disc) < 1e-9:
-            crit = True
-            r.append(beta * m_ / 2)
-        elif disc < 0:
-            r.append(beta * m_ / 2)
-        else:
+        if disc >= 0:
             r.append(2 * m_ / (beta * m_ + np.sqrt(disc)))   # stable form of (beta*mu - sqrt(disc))/2
+        else:
+            r.append(beta * m_ / 2)
+        if abs(disc) <= 1e-12 * (beta ** 2 * m_ ** 2 + 4 * m_):
+            crit = True                                      # (near-)critical: polynomial factor
     return min(r), crit
 
 
@@ -181,10 +180,14 @@ def rank_mod_p(M, p=P1):
 
 
 def exact_rank(M):
-    """Rank over Q of an integer matrix, as the maximum of its ranks over two large prime fields.
-    Each modular rank is a lower bound for the rational rank and equals it for all but finitely
-    many primes (those dividing every maximal nonzero minor)."""
-    return max(rank_mod_p(M, P1), rank_mod_p(M, P2))
+    """Certified rank over Q of an integer matrix, by exact integer arithmetic (FLINT fmpz_mat).
+    (Ranks over finitely many prime fields are only lower bounds and are NOT used for decisions.)"""
+    import flint
+    A = np.rint(np.asarray(M)).astype(np.int64)
+    if A.size == 0:
+        return 0
+    assert np.array_equal(A, np.asarray(M)), "exact_rank requires an integer matrix"
+    return int(flint.fmpz_mat(A.tolist()).rank())
 
 
 def null_abs(M, tol=1e-10):
@@ -226,14 +229,22 @@ def persistent_harmonic_kernel(K, L, tol=1e-10, check=True):
     if rB2:
         U, sv, _ = np.linalg.svd(L.B2, full_matrices=False)
         if int(np.sum(sv > tol)) != rB2:
-            warnings.warn("numerical rank of B_2(L) differs from exact rank: ill-conditioned complex")
+            warnings.warn("floating-point rank of B_2(L) differs from its certified rational rank; "
+                          "computed basis vectors may be inaccurate (ill-conditioned complex)")
         Q = U[:, :rB2]                         # orthonormal basis of B_1(L)
         N = _smallest_right_singular(Q[outside, :], dim_bk) if outside else np.eye(rB2)
         Bup = I1.T @ Q @ N
     M = np.hstack([K.B1.T, Bup]).T
     H = _smallest_right_singular(M, dim_ker)
     if check and H.size:
+        # independent constraints, using the original integer incidence matrices:
+        # (i) cycles of K; (ii) orthogonal to the boundary of every 2-cell of L supported in K;
+        # (iii) orthogonal to the floating-point basis of B_1(L) ∩ C_1(K). The dimension is certified.
         assert np.abs(K.B1 @ H).max() < 1e-9, "kernel vector is not a cycle"
+        if L.B2.shape[1]:
+            inside = np.all(L.B2[outside, :] == 0, axis=0) if outside else np.ones(L.B2.shape[1], bool)
+            if inside.any():
+                assert np.abs((I1.T @ L.B2[:, inside]).T @ H).max() < 1e-9, "not orthogonal to a 2-cell boundary"
         assert np.abs(Bup.T @ H).max(initial=0.0) < 1e-9, "kernel vector not orthogonal to boundaries"
     return H
 
