@@ -118,7 +118,7 @@ def exact_rate(K, beta):
         elif disc < 0:
             r.append(beta * m_ / 2)
         else:
-            r.append((beta * m_ - np.sqrt(disc)) / 2)
+            r.append(2 * m_ / (beta * m_ + np.sqrt(disc)))   # stable form of (beta*mu - sqrt(disc))/2
     return min(r), crit
 
 
@@ -151,40 +151,90 @@ def persistent_laplacian_1(K, L):
     return K.B1.T @ K.B1 + D @ D.T
 
 
+P1, P2 = 2147483629, 2147483587      # two primes below 2^31
+
+
+def rank_mod_p(M, p=P1):
+    """Rank over F_p of an integer matrix (exact modular Gaussian elimination)."""
+    A = np.rint(np.asarray(M)).astype(np.int64) % p
+    if A.size == 0:
+        return 0
+    if A.shape[0] > A.shape[1]:
+        A = A.T.copy()
+    r, (rows, cols) = 0, A.shape
+    for c in range(cols):
+        if r == rows:
+            break
+        piv = np.nonzero(A[r:, c])[0]
+        if piv.size == 0:
+            continue
+        k = r + piv[0]
+        if k != r:
+            A[[r, k]] = A[[k, r]]
+        A[r] = (A[r] * pow(int(A[r, c]), p - 2, p)) % p
+        nz = np.nonzero(A[:, c])[0]
+        nz = nz[nz != r]
+        if nz.size:
+            A[nz] = (A[nz] - (A[nz, c][:, None] * A[r]) % p) % p
+        r += 1
+    return r
+
+
+def exact_rank(M):
+    """Rank over Q of an integer matrix, as the maximum of its ranks over two large prime fields.
+    Each modular rank is a lower bound for the rational rank and equals it for all but finitely
+    many primes (those dividing every maximal nonzero minor)."""
+    return max(rank_mod_p(M, P1), rank_mod_p(M, P2))
+
+
 def null_abs(M, tol=1e-10):
-    """Orthonormal basis of ker M using an ABSOLUTE singular-value cutoff tol.
-    (scipy's null_space uses a cutoff relative to the largest singular value,
-    which treats round-off as a constraint when M is numerically zero.)"""
+    """Orthonormal basis of ker M using an ABSOLUTE singular-value cutoff tol."""
     M = np.atleast_2d(M)
     n = M.shape[1]
-    if M.shape[0] == 0 or np.abs(M).max(initial=0.0) <= tol:
+    if M.shape[0] == 0 or not np.any(M):
         return np.eye(n)
     _, sv, Vt = np.linalg.svd(M, full_matrices=True)
-    r = int(np.sum(sv > tol))
-    return Vt[r:].T
+    return Vt[int(np.sum(sv > tol)):].T
+
+
+def _smallest_right_singular(M, k):
+    """Orthonormal basis of the k right singular directions of M with smallest singular values."""
+    n = M.shape[1]
+    if k <= 0:
+        return np.zeros((n, 0))
+    if M.shape[0] == 0 or not np.any(M):
+        return np.eye(n)[:, :k]
+    Vt = np.linalg.svd(M, full_matrices=True)[2]
+    return Vt[n - k:].T
 
 
 def persistent_harmonic_kernel(K, L, tol=1e-10, check=True):
-    """Orthonormal basis of ker Delta_1^{K,L}, computed without forming the operator:
-    ker Delta_1^{K,L} = Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp. Same kernel as persistent_laplacian_1,
-    but uses only an orthonormal basis Q of B_1(L), so it scales to large Rips complexes.
-    All cutoffs are absolute (Q is orthonormal, so singular values of its blocks lie in [0,1])."""
+    """Orthonormal basis of ker Delta_1^{K,L} = Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp, computed without
+    forming the operator. The DIMENSIONS of all subspaces are fixed by exact integer ranks
+    (exact_rank of the incidence matrices); only the basis vectors are computed in floating point.
+    A warning is issued if a floating-point rank with absolute cutoff tol disagrees, which signals an
+    ill-conditioned boundary matrix (numerical-rank uncertainty)."""
+    import warnings
     _, I1 = inclusion(K, L)
     outside = [k for k, e in enumerate(L.E) if e not in K.ei]
-    cols = [K.B1.T]
+    rB1 = exact_rank(K.B1)
+    rB2 = exact_rank(L.B2) if L.B2.shape[1] else 0
+    rOut = exact_rank(L.B2[outside, :]) if (outside and L.B2.shape[1]) else 0
+    dim_bk = rB2 - rOut                       # dim of B_1(L) ∩ C_1(K)
+    dim_ker = K.nE - rB1 - dim_bk             # = persistent Betti number beta_1^{K,L}
     Bup = np.zeros((K.nE, 0))
-    if L.B2.shape[1]:
+    if rB2:
         U, sv, _ = np.linalg.svd(L.B2, full_matrices=False)
-        Q = U[:, sv > tol * max(1.0, sv.max(initial=0.0))]      # orthonormal basis of B_1(L)
-        if Q.size:
-            N = null_abs(Q[outside, :], tol) if outside else np.eye(Q.shape[1])
-            Bup = I1.T @ Q @ N                                   # basis of B_1(L) ∩ C_1(K)
-            cols.append(Bup)
-    H = null_abs(np.hstack(cols).T, tol)
+        if int(np.sum(sv > tol)) != rB2:
+            warnings.warn("numerical rank of B_2(L) differs from exact rank: ill-conditioned complex")
+        Q = U[:, :rB2]                         # orthonormal basis of B_1(L)
+        N = _smallest_right_singular(Q[outside, :], dim_bk) if outside else np.eye(rB2)
+        Bup = I1.T @ Q @ N
+    M = np.hstack([K.B1.T, Bup]).T
+    H = _smallest_right_singular(M, dim_ker)
     if check and H.size:
-        # verify against the defining constraints: cycle in K, orthogonal to K-supported L-boundaries
-        assert np.abs(K.B1 @ H).max() < 1e-8, "kernel vector is not a cycle"
-        assert np.abs(Bup.T @ H).max(initial=0.0) < 1e-8, "kernel vector not orthogonal to boundaries"
+        assert np.abs(K.B1 @ H).max() < 1e-9, "kernel vector is not a cycle"
+        assert np.abs(Bup.T @ H).max(initial=0.0) < 1e-9, "kernel vector not orthogonal to boundaries"
     return H
 
 

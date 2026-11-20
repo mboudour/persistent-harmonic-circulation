@@ -219,6 +219,18 @@ rel = np.array(rel)
 OUT["exp4"]["release_max_err"] = float(np.max(np.abs(rel - np.exp(-BETA * nu * tgrid))))
 OUT["exp4"]["nu"] = nu
 
+# ---- assertions on every reported comparison (absolute tolerances) ----
+assert OUT["exp1"]["max_ratio_res_over_bound"] <= 1.0
+assert OUT["exp1"]["no_birth_residual"] < 1e-12
+assert OUT["exp2"]["max_err_over_bound"] <= 1.0
+for p_ in OUT["exp3"]["plap"]:
+    assert p_["dim_ker"] == p_["pers_betti"]
+    assert p_["norm_transport"] <= p_["norm_proj"] + 1e-9
+hn = OUT["exp3"]["harm_norm"]
+assert all(hn[k + 1] <= hn[k] + 1e-12 for k in range(len(hn) - 1))
+assert OUT["exp3"]["sim_residual_norm"][2048.0]["err"] < 1e-5
+assert OUT["exp4"]["err"] < 1e-12 and OUT["exp4"]["full_bars"] == 0
+assert OUT["exp4"]["release_max_err"] < 1e-12
 with open("results/summary.json", "w") as fh:
     json.dump(OUT, fh, indent=1, default=float)
 print(json.dumps(OUT, indent=1, default=float))
@@ -332,6 +344,8 @@ ds = np.arange(2, 13)
 lam_c = [np.linalg.norm(Lambda(Kc, Complex(Vc, Ec + [(0, int(d))])), 2) ** 2 for d in ds]
 Rc = ds * (n - ds) / n
 OUT["exp5"]["cycle_max_err"] = float(np.max(np.abs(np.array(lam_c) - Rc / (Rc + 1))))
+assert OUT["exp5"]["path_max_abs_err"] < 1e-12 and OUT["exp5"]["cycle_max_err"] < 1e-12
+assert OUT["exp5"]["types"]["pendant"]["max_lam2"] < 1e-20 and OUT["exp5"]["types"]["cells"]["max_lam2"] < 1e-20
 with open("results/summary.json", "w") as fh:
     json.dump(OUT, fh, indent=1, default=float)
 print(json.dumps(OUT["exp5"], indent=1))
@@ -353,4 +367,4 @@ ax[1].legend(frameon=False, fontsize=7, ncol=2)
 ax[1].set_title("(b) new paths in random 2-complexes", fontsize=9)
 fig.tight_layout()
 fig.savefig("figures/fig3_leakage_combinatorics.pdf")
-print("figure 3 written")
+print("figure 3 written; all assertions passed")

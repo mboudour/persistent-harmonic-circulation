@@ -36,9 +36,9 @@ No external data are used. `results/summary.json` and `figures/*.pdf` are genera
 
 ## Tolerances
 
-- **Identities:** assertions compare with an absolute tolerance of 1e-9 (`rtol=0`).
-- **Ranks:** singular values below 1e-8 count as zero.
+- **Assertions:** identities between matrices are asserted with an absolute tolerance of 1e-9 (`rtol=0`). Comparisons of simulated limits with predictions use 1e-6, and the Rips dwell-time check uses 1e-5.
+- **Ranks:** in tests, singular values below 1e-8 count as zero.
 - **Harmonic bases:** computed with `scipy.linalg.null_space`, using a cutoff of 1e-10 relative to the largest singular value of the Hodge Laplacian.
-- **`persistent_harmonic_kernel`:** uses absolute cutoffs of 1e-10 on blocks of orthonormal matrices and checks every returned vector against the defining constraints.
+- **`persistent_harmonic_kernel`:** the dimensions of all subspaces come from exact integer ranks of the incidence matrices (`exact_rank`, computed over two primes near 2^31). Only basis vectors are computed in floating point. A warning is issued if a floating-point rank disagrees with the exact one. Floating-point bases of ill-conditioned complexes can still be inaccurate, even when the dimension is correct.
 
-All four scripts assert their checks.
+All four scripts, including `experiments.py`, assert the comparisons they report.

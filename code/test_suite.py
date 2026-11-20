@@ -66,6 +66,18 @@ def main():
     # zero sector: single vertex
     from phc import exact_rate
     ok("zero exact sector: single vertex has alpha_E = infinity", exact_rate(Complex([0], []), 0.5)[0] == np.inf)
+    ok("stable overdamped rate for very large beta", abs(exact_rate(Complex([0, 1], [(0, 1)]), 1e9)[0] - 1e-9) < 1e-18)
+    from phc import null_abs, exact_rank
+    ok("null_abs uses the singular-value criterion", null_abs(np.full((2, 2), 0.75e-10)).shape[1] == 1)
+    # regression: ill-conditioned complex (33 loops, unit lower bidiagonal boundary with entries 2)
+    n33 = 33; E33, loop = [], []
+    for j in range(n33):
+        a_, b_ = 2 * j + 1, 2 * j + 2
+        E33 += [(0, a_), (a_, b_), (0, b_)]; loop.append((a_, b_))
+    F33 = [(0, *loop[j], 0, *loop[j + 1], 0, *loop[j + 1]) for j in range(n33 - 1)] + [(0, *loop[-1])]
+    K33 = Complex(range(2 * n33 + 1), E33, F33)
+    ok("regression: ill-conditioned 33-loop complex has trivial persistent kernel",
+       exact_rank(K33.B2) == 33 and persistent_harmonic_kernel(K33, K33).shape[1] == 0)
 
     for trial in range(30):
         V, E, F = random_complex(9, 0.35, 6, rng)
@@ -85,7 +97,7 @@ def main():
         ok("dim ker Delta^{K,L} = rank Phi_{KL}", ker.shape[1] == r == ker2.shape[1])
         ok("kernel-equivalent routine has the same kernel", close(ker @ ker.T, ker2 @ ker2.T, atol=TOL))
         if ker.shape[1]:
-            ok("fast kernel vectors satisfy the operator", close(D @ ker2, 0, atol=1e-8))
+            ok("fast kernel vectors satisfy the operator", close(D @ ker2, 0, atol=TOL))
         Lp = Complex(V + [99], sorted(E + [(int(rng.integers(len(V))), 99)]), F)
         Dp = persistent_laplacian_1(K, Lp)
         wp, Vp = np.linalg.eigh(Dp)
