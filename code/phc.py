@@ -11,6 +11,50 @@ from scipy.linalg import expm, null_space, orth
 TOL = 1e-10
 
 
+def _fm(A):
+    """FLINT integer matrix from an integer-valued numpy array (or pass through a FLINT matrix)."""
+    import flint
+    if isinstance(A, flint.fmpz_mat):
+        return A
+    A = np.asarray(A)
+    Ai = np.rint(A).astype(np.int64)
+    assert np.array_equal(Ai, A), "integer matrix required"
+    return flint.fmpz_mat(Ai.tolist()) if Ai.size else flint.fmpz_mat(Ai.shape[0], Ai.shape[1])
+
+
+def int_nullspace(A, n=None):
+    """Exact basis (as a FLINT integer matrix, columns) of the rational null space of an integer matrix."""
+    import flint
+    M = _fm(A)
+    if M.nrows() == 0:
+        k = M.ncols() if n is None else n
+        return flint.fmpz_mat([[int(i == j) for j in range(k)] for i in range(k)]) if k else flint.fmpz_mat(0, 0)
+    X, k = M.nullspace()
+    return flint.fmpz_mat([[X[i, j] for j in range(k)] for i in range(X.nrows())]) if k else flint.fmpz_mat(X.nrows(), 0)
+
+
+def orthonormalize_exact_basis(X):
+    """Orthonormal float basis of the column space of an exact integer basis X (FLINT, full column rank).
+    The basis is first LLL-reduced (exactly, same lattice and hence same column space) to improve its
+    conditioning; each column is then scaled exactly by its largest entry before conversion."""
+    n, k = X.nrows(), X.ncols()
+    if k == 0:
+        return np.zeros((n, 0))
+    try:
+        X = X.transpose().lll().transpose()
+    except Exception:
+        pass
+    rows = X.tolist()
+    B = np.empty((n, k))
+    for j in range(k):
+        m = max(abs(int(rows[i][j])) for i in range(n)) or 1
+        for i in range(n):
+            B[i, j] = int(rows[i][j]) / m
+    Q, _ = np.linalg.qr(B)
+    Q, _ = np.linalg.qr(Q)          # second pass of Gram-Schmidt for orthogonality
+    return Q
+
+
 class Complex:
     """Finite oriented 2-dimensional cell complex inside a fixed ambient complex.
 
@@ -55,23 +99,30 @@ class Complex:
     def L1(self):
         return self.B1.T @ self.B1 + self.B2 @ self.B2.T
 
-    # orthogonal projectors of the Hodge decomposition of C^1
-    def P_exact(self):
-        Q = orth(self.B1.T) if self.nE else np.zeros((0, 0))
-        return Q @ Q.T
-
-    def P_coexact(self):
-        if self.B2.shape[1] == 0:
-            return np.zeros((self.nE, self.nE))
-        Q = orth(self.B2)
-        return Q @ Q.T if Q.size else np.zeros((self.nE, self.nE))
-
+    # orthogonal projectors of the Hodge decomposition of C^1.
+    # Dimensions are certified by exact integer arithmetic; only orthonormalization is floating point.
     def harm_basis(self):
-        return null_space(self.L1(), rcond=1e-10)
+        if not hasattr(self, "_H"):
+            A = np.vstack([self.B1, self.B2.T]) if self.B2.shape[1] else self.B1
+            self._H = orthonormalize_exact_basis(int_nullspace(A, self.nE))
+        return self._H
 
     def P_harm(self):
         H = self.harm_basis()
         return H @ H.T
+
+    def P_exact(self):
+        if not hasattr(self, "_PE"):
+            r = exact_rank(self.B1) if self.nE else 0
+            if r == 0:
+                self._PE = np.zeros((self.nE, self.nE))
+            else:
+                U = np.linalg.svd(self.B1.T, full_matrices=False)[0][:, :r]
+                self._PE = U @ U.T
+        return self._PE
+
+    def P_coexact(self):
+        return np.eye(self.nE) - self.P_exact() - self.P_harm()
 
     def betti1(self):
         return self.harm_basis().shape[1]
@@ -108,17 +159,18 @@ def exact_rate(K, beta):
     mu = mu[mu > 1e-9]
     if mu.size == 0:            # single vertex: empty exact sector, convention alpha_E = infinity
         return np.inf, False
-    r = []
-    crit = False
+    r, crit_k = [], []
     for m_ in mu:
         disc = beta ** 2 * m_ ** 2 - 4 * m_
         if disc >= 0:
             r.append(2 * m_ / (beta * m_ + np.sqrt(disc)))   # stable form of (beta*mu - sqrt(disc))/2
         else:
             r.append(beta * m_ / 2)
-        if abs(disc) <= 1e-12 * (beta ** 2 * m_ ** 2 + 4 * m_):
-            crit = True                                      # (near-)critical: polynomial factor
-    return min(r), crit
+        crit_k.append(abs(disc) <= 1e-12 * (beta ** 2 * m_ ** 2 + 4 * m_))
+    rmin = min(r)
+    # the polynomial factor matters only if a slowest mode is (near-)critical
+    crit = any(c for rk, c in zip(r, crit_k) if rk <= rmin * (1 + 1e-12))
+    return rmin, crit
 
 
 def Phi(K, L):
@@ -137,46 +189,20 @@ def Lambda(K, L):
 def persistent_laplacian_1(K, L):
     """Persistent 1-Laplacian Delta_1^{K,L} on C^1(K) (Wang-Nguyen-Wei; Memoli-Wan-Wang):
         Delta = d0 d0^* + D D^*,  D = rho d1^* restricted to C_2^{L,K},
-    where C_2^{L,K} = {w in C^2(L): d1^* w supported on edges of K}, with the
-    Euclidean metric inherited from C^2(L)."""
+    where C_2^{L,K} = {w in C^2(L): d1^* w supported on edges of K}, with the Euclidean metric
+    inherited from C^2(L). The domain C_2^{L,K} is obtained from an exact integer null space."""
     _, I1 = inclusion(K, L)
     outside = [k for k, e in enumerate(L.E) if e not in K.ei]
     nF = L.B2.shape[1]
     if nF == 0:
         D = np.zeros((K.nE, 0))
     else:
-        N = null_space(L.B2[outside, :], rcond=1e-12) if outside else np.eye(nF)
-        D = I1.T @ L.B2 @ N            # N: orthonormal basis of the constrained 2-chain domain
+        N = orthonormalize_exact_basis(int_nullspace(L.B2[outside, :], nF)) if outside else np.eye(nF)
+        D = I1.T @ L.B2 @ N
     return K.B1.T @ K.B1 + D @ D.T
 
 
 P1, P2 = 2147483629, 2147483587      # two primes below 2^31
-
-
-def rank_mod_p(M, p=P1):
-    """Rank over F_p of an integer matrix (exact modular Gaussian elimination)."""
-    A = np.rint(np.asarray(M)).astype(np.int64) % p
-    if A.size == 0:
-        return 0
-    if A.shape[0] > A.shape[1]:
-        A = A.T.copy()
-    r, (rows, cols) = 0, A.shape
-    for c in range(cols):
-        if r == rows:
-            break
-        piv = np.nonzero(A[r:, c])[0]
-        if piv.size == 0:
-            continue
-        k = r + piv[0]
-        if k != r:
-            A[[r, k]] = A[[k, r]]
-        A[r] = (A[r] * pow(int(A[r, c]), p - 2, p)) % p
-        nz = np.nonzero(A[:, c])[0]
-        nz = nz[nz != r]
-        if nz.size:
-            A[nz] = (A[nz] - (A[nz, c][:, None] * A[r]) % p) % p
-        r += 1
-    return r
 
 
 def exact_rank(M):
@@ -200,56 +226,37 @@ def null_abs(M, tol=1e-10):
     return Vt[int(np.sum(sv > tol)):].T
 
 
-def _smallest_right_singular(M, k):
-    """Orthonormal basis of the k right singular directions of M with smallest singular values."""
-    n = M.shape[1]
-    if k <= 0:
-        return np.zeros((n, 0))
-    if M.shape[0] == 0 or not np.any(M):
-        return np.eye(n)[:, :k]
-    Vt = np.linalg.svd(M, full_matrices=True)[2]
-    return Vt[n - k:].T
-
-
-def persistent_harmonic_kernel(K, L, tol=1e-10, check=True):
-    """Orthonormal basis of ker Delta_1^{K,L} = Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp, computed without
-    forming the operator. The DIMENSIONS of all subspaces are fixed by exact integer ranks
-    (exact_rank of the incidence matrices); only the basis vectors are computed in floating point.
-    A warning is issued if a floating-point rank with absolute cutoff tol disagrees, which signals an
-    ill-conditioned boundary matrix (numerical-rank uncertainty)."""
-    import warnings
+def persistent_harmonic_kernel(K, L, check=True):
+    """Orthonormal basis of ker Delta_1^{K,L} = Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp.
+    The subspace is computed EXACTLY over Q with FLINT: an integer generating set of B_1(L) ∩ C_1(K)
+    is rho d1^* W, with W an integer basis of ker(d1^* restricted to edges outside K); the kernel is the
+    integer null space of [d0^*; (rho d1^* W)^T]. Only the final orthonormalization is floating point."""
     _, I1 = inclusion(K, L)
     outside = [k for k, e in enumerate(L.E) if e not in K.ei]
-    rB1 = exact_rank(K.B1)
-    rB2 = exact_rank(L.B2) if L.B2.shape[1] else 0
-    rOut = exact_rank(L.B2[outside, :]) if (outside and L.B2.shape[1]) else 0
-    dim_bk = rB2 - rOut                       # dim of B_1(L) ∩ C_1(K)
-    dim_ker = K.nE - rB1 - dim_bk             # = persistent Betti number beta_1^{K,L}
-    Bup = np.zeros((K.nE, 0))
-    if rB2:
-        U, sv, _ = np.linalg.svd(L.B2, full_matrices=False)
-        if int(np.sum(sv > tol)) != rB2:
-            warnings.warn("floating-point rank of B_2(L) differs from its certified rational rank; "
-                          "computed basis vectors may be inaccurate (ill-conditioned complex)")
-        Q = U[:, :rB2]                         # orthonormal basis of B_1(L)
-        N = _smallest_right_singular(Q[outside, :], dim_bk) if outside else np.eye(rB2)
-        Bup = I1.T @ Q @ N
-    M = np.hstack([K.B1.T, Bup]).T
-    H = _smallest_right_singular(M, dim_ker)
-    if check and H.size:
-        # independent constraints, using the original integer incidence matrices:
-        # (i) cycles of K; (ii) orthogonal to the boundary of every 2-cell of L supported in K;
-        # (iii) orthogonal to the floating-point basis of B_1(L) ∩ C_1(K). The dimension is certified.
-        assert np.abs(K.B1 @ H).max() < 1e-9, "kernel vector is not a cycle"
-        if L.B2.shape[1]:
-            inside = np.all(L.B2[outside, :] == 0, axis=0) if outside else np.ones(L.B2.shape[1], bool)
-            if inside.any():
-                assert np.abs((I1.T @ L.B2[:, inside]).T @ H).max() < 1e-9, "not orthogonal to a 2-cell boundary"
-        assert np.abs(Bup.T @ H).max(initial=0.0) < 1e-9, "kernel vector not orthogonal to boundaries"
-    return H
+    rows = [_fm(K.B1)]
+    nF = L.B2.shape[1]
+    if nF:
+        W = int_nullspace(L.B2[outside, :], nF) if outside else None
+        B2K = _fm(I1.T @ L.B2)                              # rows of d1^* on edges of K
+        Bup = B2K * W if W is not None else B2K             # integer generators of B_1(L) ∩ C_1(K)
+        if Bup.ncols():
+            rows.append(Bup.transpose())
+    import flint
+    M = rows[0]
+    for R in rows[1:]:
+        M = flint.fmpz_mat(M.tolist() + R.tolist())
+    X = int_nullspace(M, K.nE)
+    if check:
+        assert (M * X).is_zero(), "exact kernel check failed"
+        rB1 = exact_rank(K.B1)
+        dim_bk = (exact_rank(L.B2) - (exact_rank(L.B2[outside, :]) if outside else 0)) if nF else 0
+        assert X.ncols() == K.nE - rB1 - dim_bk, "kernel dimension differs from beta_1^{K,L}"
+    return orthonormalize_exact_basis(X)
 
 
 def effective_resistance(K, a, b):
+    if not K.connected():
+        raise ValueError("effective resistance requires a connected 1-skeleton")
     Lp = np.linalg.pinv(K.L0())
     e = np.zeros(K.nV); e[K.vi[a]] = 1; e[K.vi[b]] = -1
     return float(e @ Lp @ e)

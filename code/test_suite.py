@@ -5,7 +5,7 @@ import numpy as np
 import gudhi
 import networkx as nx
 from scipy.linalg import expm, null_space
-from phc import (Complex, inclusion, generator, Phi, Lambda, persistent_laplacian_1,
+from phc import (effective_resistance, Complex, inclusion, generator, Phi, Lambda, persistent_laplacian_1,
                  persistent_harmonic_kernel, leakage_single_chord, leakage_new_path, simulate_forward,
                  adiabatic_prediction)
 
@@ -104,6 +104,49 @@ def main():
     beta_c = np.sqrt(2) * (1 + 1e-12)                 # single edge: mu = 2, critical beta = sqrt(2)
     disc = beta_c ** 2 * 4 - 8
     true_rate = 4 / (2 * beta_c + np.sqrt(max(disc, 0)))
+    # adversarial: well-conditioned B_2(L) but ill-conditioned block outside K (smallest sv ~ 3e-12);
+    # the exact routine must agree with the projector computed from exact rational data
+    def build_adv(A):
+        n_, m_ = A.shape
+        VK = [0]; EK = []
+        for k_ in range(m_):
+            EK += [(0, ('a', k_)), (('a', k_), ('b', k_)), (0, ('b', k_))]; VK += [('a', k_), ('b', k_)]
+        VL, EL = list(VK), list(EK)
+        for j_ in range(n_):
+            EL += [(0, ('c', j_)), (('c', j_), ('d', j_)), (0, ('d', j_))]; VL += [('c', j_), ('d', j_)]
+        Fs = []
+        for k_ in range(m_):
+            walk = [0, ('a', k_), ('b', k_), 0]
+            for j_ in range(n_):
+                for _ in range(abs(int(A[j_, k_]))):
+                    walk += [('c', j_), ('d', j_), 0] if A[j_, k_] > 0 else [('d', j_), ('c', j_), 0]
+            Fs.append(tuple(walk[:-1]))
+        return Complex(VK, EK), Complex(VL, EL, Fs)
+    n40 = 40
+    A40 = np.c_[np.eye(n40, dtype=int) + 2 * np.eye(n40, k=-1, dtype=int), np.r_[np.zeros(n40 - 1, int), 1]]
+    Ka, La = build_adv(A40)
+    Ha = persistent_harmonic_kernel(Ka, La)
+    # exact answer: K-loop combinations w (cycles of K) orthogonal to the K-part of every L-boundary in C_1(K):
+    # here B_1(L) ∩ C_1(K) is spanned by the K-loop part of the single rational null vector of A40
+    import flint
+    Xn, kn = flint.fmpz_mat(A40.tolist()).nullspace()
+    v = np.array([float(int(Xn[i_, 0])) for i_ in range(Xn.nrows())])
+    loopvec = np.zeros((Ka.nE, n40 + 1))
+    for k_ in range(n40 + 1):
+        loopvec[Ka.ei[(0, ('a', k_))], k_] = 1; loopvec[Ka.ei[(('a', k_), ('b', k_))], k_] = 1
+        loopvec[Ka.ei[(0, ('b', k_))], k_] = -1
+    b = loopvec @ v; b /= np.linalg.norm(b)
+    Zl, _ = np.linalg.qr(loopvec)
+    Pex = Zl @ Zl.T - np.outer(b, b)
+    ok("adversarial: exact kernel routine matches the rational answer",
+       Ha.shape[1] == n40 and close(Ha @ Ha.T, Pex, atol=1e-12))
+    ok("Hodge bases are exact: 33-loop complex has betti_1 = 0", K33.betti1() == 0)
+    try:
+        effective_resistance(Complex([0, 1, 2, 3], [(0, 1), (2, 3)]), 0, 2); guarded = False
+    except ValueError:
+        guarded = True
+    ok("effective resistance refuses a disconnected 1-skeleton", guarded)
+    ok("critical flag only for a slowest mode", exact_rate(Complex([0, 1, 2], [(0, 1), (1, 2)]), 2 / np.sqrt(3))[1] is False)
     ok("near-critical rate is never overstated",
        exact_rate(Complex([0, 1], [(0, 1)]), beta_c)[0] <= true_rate + 1e-15)
     ok("regression: ill-conditioned 33-loop complex has trivial persistent kernel",
@@ -226,14 +269,14 @@ def main():
             a, b = nonE[int(rng.integers(len(nonE)))]
             L2 = Complex(V, E + [(a, b)], F)
             val, R = leakage_single_chord(K, a, b)
-            ok("Proposition (single chord): ||Lambda||^2 = R/(1+R)",
+            ok("Proposition 4 (single chord): ||Lambda||^2 = R/(1+R)",
                abs(np.linalg.norm(Lambda(K, L2), 2) - val) < 1e-9)
             for ell in (2, 3, 5):
                 mids = [200 + k for k in range(ell - 1)]
                 chain = [a] + mids + [b]
                 L3 = Complex(V + mids, E + [(chain[k], chain[k + 1]) for k in range(ell)], F)
                 val3, _ = leakage_new_path(K, a, b, ell)
-                ok("Proposition (new path): ||Lambda||^2 = R/(R+ell)",
+                ok("Proposition 4 (new path): ||Lambda||^2 = R/(R+ell)",
                    abs(np.linalg.norm(Lambda(K, L3), 2) - val3) < 1e-9)
 
     # 5. dynamics: exact recursion with finite dwell times, consensus, bound ------------------
@@ -288,7 +331,7 @@ def main():
         w = Kf.B2[:, 0] / np.linalg.norm(Kf.B2[:, 0])
         for tau in (0.0, 0.3, 1.0):
             z = expm(tau * generator(Kf, beta)) @ np.r_[np.zeros(k), w]
-            ok("Proposition 5 release formula", abs(np.linalg.norm(Ku.P_harm() @ z[k:]) - np.exp(-k * beta * tau)) < 1e-12)
+            ok("Proposition 6 release formula", abs(np.linalg.norm(Ku.P_harm() @ z[k:]) - np.exp(-k * beta * tau)) < 1e-12)
 
     print(f"all {len(passed)} checks passed:")
     for p in passed:

@@ -83,6 +83,8 @@ rng = np.random.default_rng(11)
 tau_grid = np.array([0.5, 1, 2, 4, 8, 12, 16, 24, 32, 48])
 curves = []
 cons_err = []
+lam_all = []
+faces_final = []
 for trial in range(6):
     Ks = random_filtration(rng=rng)
     x = rng.normal(size=Ks[0].nV)
@@ -97,6 +99,7 @@ for trial in range(6):
         mean = (mean * Ks[i - 1].nV + xi[i].sum()) / Ks[i].nV
     errs, bnds = [], []
     lams = [np.linalg.norm(Lambda(Ks[i], Ks[i + 1]), 2) for i in range(len(Ks) - 1)]
+    lam_all.extend(lams); faces_final.append(len(Ks[-1].F))
     cpred = (x.sum() + sum(v.sum() for v in xi[1:])) / Ks[-1].nV
     for t in tau_grid:
         cval, uinf, _ = simulate_forward(Ks, BETA, [t] * (len(Ks) - 1), x, u, xi, ze)
@@ -107,6 +110,8 @@ for trial in range(6):
     curves.append((np.array(errs), np.array(bnds), [K.betti1() for K in Ks]))
 OUT["exp2"] = dict(max_err_over_bound=float(max(np.max(e / b) for e, b, _ in curves)),
                    max_consensus_err=float(max(cons_err)),
+                   lambda_norm_range=[float(min(lam_all)), float(max(lam_all))],
+                   faces_final=[int(f) for f in faces_final],
                    betti=[c[2] for c in curves])
 
 # ---------------------------------------------------------------------------
@@ -211,7 +216,6 @@ OUT["exp4"] = dict(residual_norm=float(np.linalg.norm(uZ)), predicted_norm=float
 V8, E8 = list(range(8)), E
 Kf = Complex(V8, E8, [tuple(range(8))])
 Ku = Complex(V8, E8)
-w = Kf.P_coexact() @ np.ones(8)
 w = Kf.B2[:, 0] / np.linalg.norm(Kf.B2[:, 0])
 nu = float(np.linalg.eigvalsh(Kf.B2.T @ Kf.B2)[0])
 rel = []
@@ -248,7 +252,7 @@ ax[0].semilogy(taus, res, color="k", label=r"$\|u_\infty\|$ (simulated)")
 ax[0].semilogy(taus, lam01 * gain * z0, color="0.55", ls="--",
                label=r"$\|\Lambda_{1}\|\,m_{K_0}(\tau)\,\|z_0\|$")
 ax[0].semilogy(taus, lam01 * z0 * np.exp(-alpha0 * taus) * 3, color="0.55", ls=":",
-               label=rf"slope $-\alpha_{{\mathrm{{ex}}}}={-alpha0:.3f}$")
+               label=rf"slope $-\alpha_{{\mathcal{{E}}}}={-alpha0:.3f}$")
 ax[0].set_xlabel(r"dwell time $\tau_0$ on $K_0$")
 ax[0].set_ylim(1e-6, 3)
 ax[0].legend(frameon=False, fontsize=7, loc="lower left")
@@ -262,7 +266,7 @@ ax[1].set_xlabel(r"common dwell time $\tau$")
 ax[1].legend(frameon=False, fontsize=7, loc="lower left")
 ax[1].set_title("(b) random filtrations, $m=4$", fontsize=9)
 fig.tight_layout()
-fig.savefig("figures/fig1_generation_and_dwell.pdf")
+fig.savefig("figures/fig1_generation_and_dwell.pdf", metadata={"CreationDate": None})
 
 fig, ax = plt.subplots(1, 2, figsize=(6.6, 2.6))
 bars_sorted = sorted(bars, key=lambda p: p[0])
@@ -283,7 +287,7 @@ ax[1].set_xlabel("Rips scale $r_j$")
 ax[1].legend(frameon=False, fontsize=7)
 ax[1].set_title("(b) transported harmonic content", fontsize=9)
 fig.tight_layout()
-fig.savefig("figures/fig2_rips.pdf")
+fig.savefig("figures/fig2_rips.pdf", metadata={"CreationDate": None})
 print("figures written")
 
 # ---------------------------------------------------------------------------
@@ -371,5 +375,5 @@ ax[1].set_ylabel(r"computed $\|\Lambda\|^2$")
 ax[1].legend(frameon=False, fontsize=7, ncol=2)
 ax[1].set_title("(b) new paths in random 2-complexes", fontsize=9)
 fig.tight_layout()
-fig.savefig("figures/fig3_leakage_combinatorics.pdf")
+fig.savefig("figures/fig3_leakage_combinatorics.pdf", metadata={"CreationDate": None})
 print("figure 3 written; all assertions passed")
