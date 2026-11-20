@@ -10,16 +10,22 @@ The paper studies the node–edge cochain system
 
 ## Contents
 
-- `code/phc.py`: cell complexes, Hodge projectors, harmonic transport `Phi`, leakage operator `Lambda`, persistent Laplacian, and the switched system.
-- `code/test_theorems.py`: numerical checks of the switching identity, harmonic transport, persistent Laplacian kernels and adjoint transport on 25 random Rips filtrations.
+- `code/phc.py`: cell complexes, Hodge projectors, harmonic transport `Phi`, leakage operator `Lambda`, the switched system, and two persistent-Laplacian routines:
+  - `persistent_laplacian_1(K, L)` builds the operator as defined in the paper: `d0 d0^* + D D^*`, with `D = rho d1^*` on an orthonormal basis of the constrained 2-chain domain.
+  - `persistent_harmonic_kernel(K, L)` returns only its kernel, computed as `Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp`. This gives the same subspace without the constrained domain and is used for large Rips complexes.
+- `code/test_suite.py`: assertion-based checks of the paper's statements. Matrix identities use tolerance 1e-9, and singular values below 1e-8 count as zero. It includes a filled-triangle regression test for the persistent Laplacian and a comparison of GUDHI persistent Betti numbers (over F_11 and F_13) with ranks over R.
+- `code/test_theorems.py`: transport and persistent-Laplacian identities on 25 random Rips filtrations.
 - `code/test_dynamics.py`: dwell-time checks on random 2-complex filtrations.
-- `code/experiments.py`: Experiments 1–4 of the paper. Writes `figures/*.pdf` and `results/summary.json`.
+- `code/experiments.py`: Experiments 1–5 of the paper. Writes `figures/*.pdf` and `results/summary.json`.
+
+GUDHI computes persistence over a finite field; the default is F_11. The theory is over R. The test suite compares the two on the complexes used.
 
 ## Reproduce
 
     pip install -r requirements.txt
+    python code/test_suite.py
     python code/experiments.py
     python code/test_theorems.py
     python code/test_dynamics.py
 
-`experiments.py` finishes in under a minute on a laptop. `test_theorems.py` takes about two minutes.
+`test_suite.py` and `experiments.py` each finish in under a minute on a laptop. `test_theorems.py` takes about two minutes. All random seeds are fixed in the scripts.

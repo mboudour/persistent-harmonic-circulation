@@ -134,21 +134,52 @@ def Lambda(K, L):
 
 
 def persistent_laplacian_1(K, L):
-    """Persistent 1-Laplacian Delta_1^{K,L} on C_1(K) (Memoli-Wan-Wang).
-    up part: boundaries of L-chains whose boundary lies in C_1(K)."""
+    """Persistent 1-Laplacian Delta_1^{K,L} on C^1(K) (Wang-Nguyen-Wei; Memoli-Wan-Wang):
+        Delta = d0 d0^* + D D^*,  D = rho d1^* restricted to C_2^{L,K},
+    where C_2^{L,K} = {w in C^2(L): d1^* w supported on edges of K}, with the
+    Euclidean metric inherited from C^2(L)."""
     _, I1 = inclusion(K, L)
-    # C_2^{L,K} = {c in C_2(L): B2_L c supported on K-edges}
     outside = [k for k, e in enumerate(L.E) if e not in K.ei]
-    if L.B2.shape[1] == 0:
-        Bup = np.zeros((K.nE, 0))
+    nF = L.B2.shape[1]
+    if nF == 0:
+        D = np.zeros((K.nE, 0))
     else:
-        Q = orth(L.B2)                        # orthonormal basis of B_1(L)
-        if outside:
-            N = null_space(Q[outside, :], rcond=1e-10)
-            Bup = I1.T @ Q @ N                # basis of B_1(L) ∩ C_1(K)
-        else:
-            Bup = I1.T @ Q
-    return Bup @ Bup.T + K.B1.T @ K.B1
+        N = null_space(L.B2[outside, :], rcond=1e-12) if outside else np.eye(nF)
+        D = I1.T @ L.B2 @ N            # N: orthonormal basis of the constrained 2-chain domain
+    return K.B1.T @ K.B1 + D @ D.T
+
+
+def persistent_harmonic_kernel(K, L, tol=1e-8):
+    """Orthonormal basis of ker Delta_1^{K,L}, computed without forming the operator:
+    ker Delta_1^{K,L} = Z_1(K) ∩ (B_1(L) ∩ C_1(K))^perp. Same kernel as persistent_laplacian_1,
+    but uses only an orthonormal basis of B_1(L), so it scales to large Rips complexes."""
+    _, I1 = inclusion(K, L)
+    outside = [k for k, e in enumerate(L.E) if e not in K.ei]
+    cols = [K.B1.T]
+    if L.B2.shape[1]:
+        Q = orth(L.B2)
+        if Q.size:
+            N = null_space(Q[outside, :], rcond=1e-10) if outside else np.eye(Q.shape[1])
+            cols.append(I1.T @ Q @ N)
+    M = np.hstack(cols)
+    return null_space(M.T, rcond=tol)
+
+
+def effective_resistance(K, a, b):
+    Lp = np.linalg.pinv(K.L0())
+    e = np.zeros(K.nV); e[K.vi[a]] = 1; e[K.vi[b]] = -1
+    return float(e @ Lp @ e)
+
+
+def leakage_new_path(K, a, b, ell):
+    """Closed form for adding a path of ell new edges (ell-1 new vertices) between old a != b,
+    lying on no 2-cell: ||Lambda||^2 = R/(R+ell), R = effective resistance in K."""
+    R = effective_resistance(K, a, b)
+    return np.sqrt(R / (R + ell)), R
+
+
+def leakage_single_chord(K, a, b):
+    return leakage_new_path(K, a, b, 1)
 
 
 def simulate_forward(stages, beta, taus, x0, u0, xi=None, zeta=None):

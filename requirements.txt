@@ -1,4 +1,6 @@
-numpy>=1.26
-scipy>=1.11
-matplotlib>=3.8
-gudhi>=3.9
+# Tested environment (Python 3.13.18)
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+gudhi==3.13.0
+networkx==3.7

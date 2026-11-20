@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import gudhi
 from scipy.linalg import expm
 from phc import (Complex, inclusion, generator, exact_rate, Phi, Lambda,
-                 persistent_laplacian_1, simulate_forward, adiabatic_prediction)
+                 persistent_laplacian_1, persistent_harmonic_kernel, simulate_forward, adiabatic_prediction)
 
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 os.makedirs("figures", exist_ok=True)
@@ -155,9 +155,7 @@ for i in range(1, len(Ks)):
 a0 = Ks[0].P_harm() @ u
 plap = []
 for j in range(len(Ks)):
-    D = persistent_laplacian_1(Ks[0], Ks[j])
-    w, Vv = np.linalg.eigh(D)
-    Kr = Vv[:, w < 1e-8]
+    Kr = persistent_harmonic_kernel(Ks[0], Ks[j])
     plap.append(dict(r=float(radii[j]), dim_ker=int(Kr.shape[1]),
                      pers_betti=int(st.persistent_betti_numbers(radii[0], radii[j])[1]),
                      norm_proj=float(np.linalg.norm(Kr.T @ a0)), norm_transport=float(harm_norm[j])))
@@ -231,7 +229,7 @@ print(json.dumps(OUT, indent=1, default=float))
 fig, ax = plt.subplots(1, 2, figsize=(6.6, 2.6))
 ax[0].semilogy(taus, res, color="k", label=r"$\|u_\infty\|$ (simulated)")
 ax[0].semilogy(taus, lam01 * gain * z0, color="0.55", ls="--",
-               label=r"$\|\Lambda_{0}\|\,m_{0}(\tau)\,\|z_0\|$")
+               label=r"$\|\Lambda_{1}\|\,m_{K_0}(\tau)\,\|z_0\|$")
 ax[0].semilogy(taus, lam01 * z0 * np.exp(-alpha0 * taus) * 3, color="0.55", ls=":",
                label=rf"slope $-\alpha_{{\mathrm{{ex}}}}={-alpha0:.3f}$")
 ax[0].set_xlabel(r"dwell time $\tau_0$ on $K_0$")
@@ -270,3 +268,89 @@ ax[1].set_title("(b) transported harmonic content", fontsize=9)
 fig.tight_layout()
 fig.savefig("figures/fig2_rips.pdf")
 print("figures written")
+
+# ---------------------------------------------------------------------------
+# Experiment 5: how leakage depends on the combinatorics of a step
+# ---------------------------------------------------------------------------
+import itertools
+from phc import leakage_new_path, effective_resistance
+from test_suite import random_complex
+
+rng = np.random.default_rng(23)
+scatter = []          # (predicted R/(R+ell), computed ||Lambda||^2, ell)
+types = {k: [] for k in ["pendant", "cells", "path", "chord_filled", "two_chords"]}
+for trial in range(300):
+    V, E, F = random_complex(12, 0.22, 6, rng)
+    K = Complex(V, E, F)
+    Es = set(E)
+    nonE = [p for p in itertools.combinations(V, 2) if p not in Es]
+    # path of ell new edges between old a,b on no 2-cell
+    a, b = nonE[int(rng.integers(len(nonE)))] if nonE else (0, 1)
+    ell = int(rng.integers(1, 5))
+    mids = [100 + k for k in range(ell - 1)]
+    ch = [a] + mids + [b]
+    L = Complex(V + mids, E + [(ch[k], ch[k + 1]) for k in range(ell)], F)
+    lam2 = np.linalg.norm(Lambda(K, L), 2) ** 2
+    R = effective_resistance(K, a, b)
+    scatter.append((R / (R + ell), lam2, ell))
+    types["path"].append((lam2, L.betti1() - K.betti1()))
+    # pendant structure (with an internal cycle) at one old vertex
+    root = int(rng.integers(12)); nv = [300 + k for k in range(4)]
+    ex = [(root, nv[0]), (nv[0], nv[1]), (nv[1], nv[2]), (nv[0], nv[2]), (nv[2], nv[3])]
+    L = Complex(V + nv, E + ex, F)
+    types["pendant"].append((np.linalg.norm(Lambda(K, L), 2) ** 2, L.betti1() - K.betti1()))
+    # 2-cells only
+    tri = [t for t in itertools.combinations(V, 3)
+           if all(q in Es for q in itertools.combinations(t, 2)) and t not in set(F)]
+    if tri:
+        L = Complex(V, E, F + [tri[int(rng.integers(len(tri)))]])
+        types["cells"].append((np.linalg.norm(Lambda(K, L), 2) ** 2, L.betti1() - K.betti1()))
+    # chord (a,b) closing a triangle a-c-b that is filled at the same step: no birth
+    cand = [(p, c) for p in nonE for c in V if (min(p[0], c), max(p[0], c)) in Es
+            and (min(p[1], c), max(p[1], c)) in Es]
+    if cand:
+        (a2, b2), c = cand[int(rng.integers(len(cand)))]
+        L = Complex(V, E + [(a2, b2)], F + [tuple(sorted((a2, b2, c)))])
+        types["chord_filled"].append((np.linalg.norm(Lambda(K, L), 2) ** 2, L.betti1() - K.betti1()))
+    # two chords at once
+    if len(nonE) > 2:
+        idx = rng.choice(len(nonE), 2, replace=False)
+        L = Complex(V, E + [nonE[i] for i in idx], F)
+        types["two_chords"].append((np.linalg.norm(Lambda(K, L), 2) ** 2, L.betti1() - K.betti1()))
+sc = np.array(scatter)
+OUT["exp5"] = dict(path_max_abs_err=float(np.max(np.abs(sc[:, 0] - sc[:, 1]))),
+                   types={k: dict(n=len(v), mean_lam2=float(np.mean([a for a, _ in v])),
+                                  frac_nonzero=float(np.mean([a > 1e-12 for a, _ in v])),
+                                  mean_dbeta=float(np.mean([d for _, d in v])),
+                                  max_lam2=float(np.max([a for a, _ in v])))
+                          for k, v in types.items()})
+# chord on a 24-cycle: closed form d(n-d)/n
+n = 24
+Vc = list(range(n)); Ec = [(k, k + 1) for k in range(n - 1)] + [(0, n - 1)]
+Kc = Complex(Vc, Ec)
+ds = np.arange(2, 13)
+lam_c = [np.linalg.norm(Lambda(Kc, Complex(Vc, Ec + [(0, int(d))])), 2) ** 2 for d in ds]
+Rc = ds * (n - ds) / n
+OUT["exp5"]["cycle_max_err"] = float(np.max(np.abs(np.array(lam_c) - Rc / (Rc + 1))))
+with open("results/summary.json", "w") as fh:
+    json.dump(OUT, fh, indent=1, default=float)
+print(json.dumps(OUT["exp5"], indent=1))
+
+fig, ax = plt.subplots(1, 2, figsize=(6.6, 2.6))
+dd = np.linspace(2, 12, 200); RR = dd * (n - dd) / n
+ax[0].plot(dd, RR / (RR + 1), color="0.6", ls="--", label=r"$R/(R+1)$, $R=d(n-d)/n$")
+ax[0].plot(ds, lam_c, "ko", ms=3, label=r"computed $\|\Lambda\|^2$")
+ax[0].set_xlabel("cycle distance $d$ between chord endpoints")
+ax[0].legend(frameon=False, fontsize=7)
+ax[0].set_title("(a) chord on a 24-cycle", fontsize=9)
+for ell, mk in zip([1, 2, 3, 4], ["o", "s", "^", "D"]):
+    s_ = sc[sc[:, 2] == ell]
+    ax[1].plot(s_[:, 0], s_[:, 1], mk, ms=2.5, mfc="none", color="k", alpha=0.8, label=rf"$\ell={ell}$")
+ax[1].plot([0, 1], [0, 1], color="0.6", lw=0.8)
+ax[1].set_xlabel(r"$R/(R+\ell)$")
+ax[1].set_ylabel(r"computed $\|\Lambda\|^2$")
+ax[1].legend(frameon=False, fontsize=7, ncol=2)
+ax[1].set_title("(b) new paths in random 2-complexes", fontsize=9)
+fig.tight_layout()
+fig.savefig("figures/fig3_leakage_combinatorics.pdf")
+print("figure 3 written")
